@@ -19,13 +19,18 @@ end
 const sentry_initialised = Ref(false)
 function sentry_message(message, level=Info)
     should_sentry() || return
-    sentry_sdk = pyimport("sentry_sdk")
-    if !sentry_initialised[]
-        sentry_sdk.init()
-        sentry_initialised[] = true
-    end
+    try
+        sentry_sdk = pyimport("sentry_sdk")
+        if !sentry_initialised[]
+            sentry_sdk.init()
+            sentry_initialised[] = true
+        end
 
-    sentry_sdk.capture_message(message)
+        sentry_sdk.capture_message(message)
+    catch exc
+        @error "Ignoring problem in sentry message" exc
+    end
+    nothing
 end
 
 end # module
