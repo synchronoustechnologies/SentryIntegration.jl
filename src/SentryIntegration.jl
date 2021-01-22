@@ -67,7 +67,7 @@ to_hex(x::UInt8) = lpad(string(x, base=16), 2, '0')
 random_trace_id() = join(to_hex.(rand(UInt8,16)))
 
 function start_transaction(func, args... ; kwds...)
-    should_sentry() || return
+    should_sentry() || return func()
 
     cm = @ignore_exception begin
         maybe_init()
