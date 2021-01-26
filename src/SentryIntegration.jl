@@ -11,8 +11,8 @@ using CodecZlib
 
 const VERSION = @PkgVersion.Version 0
 
-export sentry_message,
-    set_sentry_dsn,
+export capture_message,
+    capture_exception,
     start_transaction,
     Info,
     Warn,
