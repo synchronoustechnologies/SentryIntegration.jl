@@ -1,7 +1,7 @@
 module SentryIntegration
 
 using AutoParameters
-using Logging: Info, Warn, Error
+using Logging: Info, Warn, Error, LogLevel
 using UUIDs
 using Dates
 using HTTP
@@ -87,6 +87,7 @@ function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, 
         dsn = get(ENV, "SENTRY_DSN", nothing)
         if dsn === nothing
             # Abort - pretend nothing happened
+            @warn "No DSN for SentryIntegration"
             return
         end
     end
@@ -319,11 +320,19 @@ function capture_event(task::TaskPayload)
     push!(main_hub.queued_tasks, task)
 end
 
-function capture_message(message, level=Info)
+function capture_message(message, level::LogLevel=Info)
+    level_str = if level == Warn
+        "warning"
+    else
+        lowercase(string(level))
+    end
+    capture_message(message, level_str)
+end
+function capture_message(message, level::String)
     main_hub.initialised || return
 
     capture_event(Event(message=(; formatted=message),
-                        level=lowercase(string(level))))
+                        level))
 end
 
 # This assumes that we are calling from within a catch
