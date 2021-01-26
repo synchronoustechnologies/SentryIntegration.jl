@@ -7,7 +7,7 @@ using Dates
 using HTTP
 using JSON
 using PkgVersion
-using Libz
+using CodecZlib
 
 const VERSION = @PkgVersion.Version 0
 
@@ -24,15 +24,27 @@ export sentry_message,
 
 @AutoParm struct Event
     event_id = generate_uuid4()
-    timestamp = now(UTC) |> string
+    timestamp = nowstr()
     platform = "julia"
 
-    details
+    message = nothing
+    exception = nothing
+    level = nothing
 end
 
-Event(; kwds...) = Event(Val(:constructor) ; details=Dict{Symbol,Any}(kwds...))
 
-
+# This is only a partial implementation - supports only one span
+@AutoParm mutable struct Transaction
+    event_id::String = generate_uuid4()
+    span_id::String = generate_uuid4()[1:16]
+    name::String
+    tags = nothing
+    trace_id::String = generate_uuid4()
+    op = nothing
+    description = nothing
+    start_timestamp::String = nowstr()
+    timestamp::String = ""
+end
 
 ##############################
 # * Hub and init
@@ -47,6 +59,7 @@ struct RatioSampler
     end
 end
 
+const TaskPayload = Union{Event,Transaction}
 # This is to supposedly support the "unified api" of the sentry sdk. I'm not a
 # fan, so it will only go partway to this goal.
 # Note: a proper implementation here would make Hub a module.
@@ -62,7 +75,7 @@ end
     debug::Bool = false
 
     last_send_time = nothing
-    queued_events = Channel{Event}(100)
+    queued_tasks = Channel{TaskPayload}(100)
     sender_task = nothing
 end
 
@@ -70,6 +83,9 @@ const main_hub = Hub()
 
 function init(dsn=get(ENV, "SENTRY_DSN", error("Missing DSN")) ; traces_sample_rate=nothing, traces_sampler=nothing, debug=false)
     main_hub.initialised && @warn "Sentry already initialised."
+    if !main_hub.initialised
+        atexit(clear_queue)
+    end
 
     main_hub.debug = debug
     main_hub.dsn = dsn
@@ -89,7 +105,7 @@ function init(dsn=get(ENV, "SENTRY_DSN", error("Missing DSN")) ; traces_sample_r
     end
 
     main_hub.sender_task = @async send_worker()
-    bind(main_hub.queued_events, main_hub.sender_task)
+    bind(main_hub.queued_tasks, main_hub.sender_task)
     main_hub.initialised = true
 
     # TODO: Return something?
@@ -109,6 +125,8 @@ end
 # * Utils
 #----------------------------
 
+# Need to have an extra Z at the end - this indicates UTC?
+nowstr() = string(now(UTC)) * "Z"
 
 # Useful util
 macro ignore_exception(ex)
@@ -133,23 +151,120 @@ function generate_uuid4()
     lpad(s, 32, '0')
 end
     
-function send_event(event::Event)
-    target = "$(main_hub.upstream)/api/$(main_hub.project_id)/store/"
+# function send_event(event::Event)
+#     target = "$(main_hub.upstream)/api/$(main_hub.project_id)/store/"
 
     
-    payload = (; event.event_id,
-               event.timestamp,
-               event.platform,
-               event.details...)
-    headers = ["Content-Type" => "application/json",
+#     payload = (; event.event_id,
+#                event.timestamp,
+#                event.platform,
+#                event.details...)
+#     headers = ["Content-Type" => "application/json",
+#                "content-encoding" => "gzip",
+#                "User-Agent" => "SentryIntegration.jl/$VERSION",
+#                "X-Sentry-Auth" => "Sentry sentry_version=7, sentry_client=SentryIntegration.jl/$VERSION, sentry_timestamp=$(nowstr()), sentry_key=$(main_hub.public_key)"
+#                ]
+#     body = JSON.json(payload, 4)
+#     body = Libz.deflate(Vector{UInt8}(body))
+#     r = HTTP.request("POST", target, headers, body)
+
+#     if r.status == 429
+#         # TODO:
+#     elseif r.status == 200
+#         # TODO:
+#         r.body
+#     else
+#         error("Unknown status $(r.status)")
+#     end
+# end
+
+FilterNothings(thing) = filter(x -> x.second !== nothing, pairs(thing))
+
+function PrepareBody(event::Event, buf)
+    envelope_header = (; event.event_id,
+                       sent_at = nowstr(),
+                       dsn = main_hub.dsn
+                       )
+
+    item = (;
+            event.timestamp,
+            event.platform,
+            server_name = gethostname(),
+            event.exception,
+            event.message,
+            event.level
+            ) |> FilterNothings
+    item_str = JSON.json(item)
+
+    item_header = (; type="event",
+                   content_type="application/json",
+                   length=length(item_str)+1) # +1 for the newline to come
+
+
+    println(buf, JSON.json(envelope_header))
+    println(buf, JSON.json(item_header))
+    println(buf, item_str)
+    nothing
+end
+function PrepareBody(transaction::Transaction, buf)
+    envelope_header = (; transaction.event_id,
+                       sent_at = nowstr(),
+                       dsn = main_hub.dsn
+                       )
+
+    trace = (; 
+            transaction.trace_id,
+            transaction.op,
+            transaction.description,
+            transaction.tags,
+            transaction.span_id,
+             parent_span_id = nothing,
+            ) |> FilterNothings
+
+    item = (; type="transaction",
+            platform = "julia",
+            server_name = gethostname(),
+            transaction.event_id,
+            transaction = transaction.name,
+            transaction.start_timestamp,
+            transaction.timestamp,
+            transaction.tags,
+            contexts = (; trace),
+            spans = [],
+            ) |> FilterNothings
+    item_str = JSON.json(item)
+
+    item_header = (; type="transaction",
+                   content_type="application/json",
+                   length=length(item_str)+1) # +1 for the newline to come
+
+
+    println(buf, JSON.json(envelope_header))
+    println(buf, JSON.json(item_header))
+    println(buf, item_str)
+    nothing
+end
+
+# The envelope version
+function send_envelope(task::TaskPayload)
+    target = "$(main_hub.upstream)/api/$(main_hub.project_id)/envelope/"
+
+    headers = ["Content-Type" => "application/x-sentry-envelope",
                "content-encoding" => "gzip",
                "User-Agent" => "SentryIntegration.jl/$VERSION",
-               "X-Sentry-Auth" => "Sentry sentry_version=7, sentry_client=SentryIntegration.jl/$VERSION, sentry_timestamp=$(now(UTC)), sentry_key=$(main_hub.public_key)"
+               "X-Sentry-Auth" => "Sentry sentry_version=7, sentry_client=SentryIntegration.jl/$VERSION, sentry_timestamp=$(nowstr()), sentry_key=$(main_hub.public_key)"
                ]
-    body = JSON.json(payload, 4)
-    body = Libz.deflate(Vector{UInt8}(body))
-    r = HTTP.request("POST", target, headers, body)
 
+    buf = PipeBuffer()
+    stream = CodecZlib.GzipCompressorStream(buf)
+    PrepareBody(task, buf)
+    body = read(stream)
+    close(stream)
+
+    if main_hub.debug
+        @info "Sending HTTP request" typeof(task)
+    end
+    r = HTTP.request("POST", target, headers, body)
     if r.status == 429
         # TODO:
     elseif r.status == 200
@@ -163,8 +278,8 @@ end
 function send_worker()
     while true
         try
-            event = take!(main_hub.queued_events)
-            send_event(event)
+            event = take!(main_hub.queued_tasks)
+            send_envelope(event)
         catch exc
             if main_hub.debug
                 @error "Sentry error"
@@ -172,8 +287,14 @@ function send_worker()
             end
         end
     end
+end
 
-    # TODO: Finish sending queue
+function clear_queue()
+    while !isempty(main_hub.queued_tasks)
+        @info "Tidying up some sentry tasks before closing"
+        send_envelope(event)
+        yield()
+    end
 end
 
 
@@ -183,10 +304,10 @@ end
 
 
 
-function capture_event(event)
+function capture_event(task::TaskPayload)
     main_hub.initialised || return
 
-    push!(main_hub.queued_events, event)
+    push!(main_hub.queued_tasks, task)
 end
 
 function capture_message(message, level=Info)
@@ -202,7 +323,9 @@ function capture_exception(exceptions=catch_stack())
     main_hub.initialised || return
 
     formatted_excs = map(exceptions) do (exc,strace)
-        frames = map(Base.stacktrace(strace, false)) do frame
+        bt = Base.scrub_repl_backtrace(strace)
+        # frames = map(Base.stacktrace(strace, false)) do frame
+        frames = map(bt) do frame
             Dict(:filename => frame.file,
              :function => frame.func,
              :lineno => frame.line)
@@ -222,18 +345,8 @@ end
 # * Transactions
 #----------------------------
 
-
-
-
-to_hex(x::UInt8) = lpad(string(x, base=16), 2, '0')
-random_trace_id() = generate_uuid4()
-
-
-mutable struct Transaction
-end
-
-function start_transaction(func, args... ; kwds...)
-    transaction = get_transaction()
+function start_transaction(func ; kwds...)
+    transaction = get_transaction(; kwds...)
     try
         return func()
     finally
@@ -241,15 +354,16 @@ function start_transaction(func, args... ; kwds...)
     end
 end
 
-function get_transaction()
+function get_transaction(; kwds...)
     main_hub.initialised || return nothing
-    error("Not implemented")
+    transaction = Transaction(;kwds...)
 end
 
 complete(::Nothing) = nothing
-function complete(::Transaction)
+function complete(transaction::Transaction)
     main_hub.initialised || error("Can't get here without sentry being initialised")
-    error("Not implemented")
+    transaction.timestamp = nowstr()
+    capture_event(transaction)
 end
 
 end # module
