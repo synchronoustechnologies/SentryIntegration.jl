@@ -160,33 +160,6 @@ function generate_uuid4()
     s = string(val, base=16)
     lpad(s, 32, '0')
 end
-    
-# function send_event(event::Event)
-#     target = "$(main_hub.upstream)/api/$(main_hub.project_id)/store/"
-
-    
-#     payload = (; event.event_id,
-#                event.timestamp,
-#                event.platform,
-#                event.details...)
-#     headers = ["Content-Type" => "application/json",
-#                "content-encoding" => "gzip",
-#                "User-Agent" => "SentryIntegration.jl/$VERSION",
-#                "X-Sentry-Auth" => "Sentry sentry_version=7, sentry_client=SentryIntegration.jl/$VERSION, sentry_timestamp=$(nowstr()), sentry_key=$(main_hub.public_key)"
-#                ]
-#     body = JSON.json(payload, 4)
-#     body = Libz.deflate(Vector{UInt8}(body))
-#     r = HTTP.request("POST", target, headers, body)
-
-#     if r.status == 429
-#         # TODO:
-#     elseif r.status == 200
-#         # TODO:
-#         r.body
-#     else
-#         error("Unknown status $(r.status)")
-#     end
-# end
 
 FilterNothings(thing) = filter(x -> x.second !== nothing, pairs(thing))
 
@@ -208,7 +181,7 @@ function PrepareBody(event::Event, buf)
 
     item_header = (; type="event",
                    content_type="application/json",
-                   length=length(item_str)+1) # +1 for the newline to come
+                   length=sizeof(item_str)+1) # +1 for the newline to come
 
 
     println(buf, JSON.json(envelope_header))
@@ -246,7 +219,7 @@ function PrepareBody(transaction::Transaction, buf)
 
     item_header = (; type="transaction",
                    content_type="application/json",
-                   length=length(item_str)+1) # +1 for the newline to come
+                   length=sizeof(item_str)+1) # +1 for the newline to come
 
 
     println(buf, JSON.json(envelope_header))
