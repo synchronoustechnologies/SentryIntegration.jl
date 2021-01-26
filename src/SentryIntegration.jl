@@ -81,11 +81,20 @@ end
 
 const main_hub = Hub()
 
-function init(dsn=get(ENV, "SENTRY_DSN", error("Missing DSN")) ; traces_sample_rate=nothing, traces_sampler=nothing, debug=false)
+function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, debug=false)
     main_hub.initialised && @warn "Sentry already initialised."
+    if dsn === nothing
+        dsn = get(ENV, "SENTRY_DSN", nothing)
+        if dsn === nothing
+            # Abort - pretend nothing happened
+            return
+        end
+    end
+        
     if !main_hub.initialised
         atexit(clear_queue)
     end
+
 
     main_hub.debug = debug
     main_hub.dsn = dsn
