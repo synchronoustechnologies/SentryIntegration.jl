@@ -3,6 +3,8 @@
 # * Transactions
 #----------------------------
 
+struct InhibitTransaction end
+
 function start_transaction(func ; kwds...)
     t = start_transaction(; kwds...)
 
@@ -13,10 +15,11 @@ function start_transaction(func ; kwds...)
     end
 end
 
-function start_transaction(; name="", trace_id=generate_uuid4(), parent_span_id=nothing, span_kwds...)
+function start_transaction(; name="", trace_id=:auto, parent_span_id=nothing, span_kwds...)
+    trace_id === nothing && return nothing
     t = get_transaction(; name, trace_id)
-    if t === nothing
-        return nothing
+    if t === nothing || t === InhibitTransaction()
+        return t
     end
 
     transaction, parent_span = t
@@ -33,6 +36,7 @@ function start_transaction(; name="", trace_id=generate_uuid4(), parent_span_id=
 end
 
 finish_transaction(::Nothing) = nothing
+finish_transaction(::InhibitTransaction) = nothing
 function finish_transaction((transaction, parent_span, span))
     complete(span)
     push!(transaction.spans, span)
@@ -44,25 +48,41 @@ function finish_transaction((transaction, parent_span, span))
 end
 
 
-function get_transaction(; kwds...)
+
+function get_transaction(; trace_id=:auto, kwds...)
     main_hub.initialised || return nothing
 
     transaction = get(task_local_storage(), :sentry_transaction, nothing)
-    if transaction !== nothing
-        parent_span = task_local_storage(:sentry_parent_span)
-        return (; transaction, parent_span)
+    if transaction === InhibitTransaction()
+        return transaction
     end
 
-    if sample(main_hub.traces_sampler)
-        transaction = Transaction(;kwds...)
-        task_local_storage(:current_transaction, transaction)
+    if transaction === nothing
+        if sample(main_hub.traces_sampler)
+            if trace_id == :auto
+                trace_id = generate_uuid4()
+            end
+            transaction = Transaction(; trace_id, kwds...)
+        else
+            transaction = InhibitTransaction()
+        end
+        task_local_storage(:sentry_transaction, transaction)
+        return (; transaction, parent_span=nothing)
     else
-        transaction = nothing
+        transaction::Transaction
+        if trace_id != :auto
+            transaction.trace_id != trace_id && main_hub.debug && @warn "Trying to start a transaction with a new trace id, inside of an old transaction"
+        end
+        parent_span = task_local_storage(:sentry_parent_span)::Span
+        return (; transaction, parent_span)
     end
-    return (; transaction, parent_span=nothing)
 end
 
 set_task_transaction(::Nothing) = nothing
+    task_local_storage(:sentry_transaction, InhibitTransaction())
+function set_task_transaction(::InhibitTransaction)
+    task_local_storage(:sentry_transaction, InhibitTransaction())
+end
 function set_task_transaction((transaction, ignored, parent_span))
     task_local_storage(:sentry_transaction, transaction)
     task_local_storage(:sentry_parent_span, parent_span)

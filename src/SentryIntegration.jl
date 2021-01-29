@@ -73,7 +73,7 @@ function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, 
 end
 
 function parse_dsn(dsn)
-    dsn == :fake && return (; upstream="", project_id="", public_key="")
+    dsn == "fake" && return (; upstream="", project_id="", public_key="")
 
     m = match(r"(?'protocol'\w+)://(?'public_key'\w+)@(?'hostname'[\w\.]+(?::\d+)?)/(?'project_id'\w+)"a, dsn)
     m === nothing && error("dsn does not fit correct format")
@@ -218,7 +218,7 @@ function send_envelope(task::TaskPayload)
     if main_hub.debug
         @info "Sending HTTP request" typeof(task)
     end
-    if main_hub.dsn === :fake
+    if main_hub.dsn === "fake"
         body = String(transcode(CodecZlib.GzipDecompressor, body))
         lines = map(eachline(IOBuffer(body))) do line
             line = JSON.Parser.parse(line)
