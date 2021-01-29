@@ -14,70 +14,20 @@ const VERSION = @PkgVersion.Version 0
 export capture_message,
     capture_exception,
     start_transaction,
+    finish_transaction,
+    set_task_transaction,
     Info,
     Warn,
     Error
 
-##############################
-# * Support structs
-#----------------------------
 
-@AutoParm struct Event
-    event_id = generate_uuid4()
-    timestamp = nowstr()
-    platform = "julia"
-
-    message = nothing
-    exception = nothing
-    level = nothing
-end
-
-
-# This is only a partial implementation - supports only one span
-@AutoParm mutable struct Transaction
-    event_id::String = generate_uuid4()
-    span_id::String = generate_uuid4()[1:16]
-    name::String
-    tags = nothing
-    trace_id::String = generate_uuid4()
-    op = nothing
-    description = nothing
-    start_timestamp::String = nowstr()
-    timestamp::String = ""
-end
+include("structs.jl")
+include("transactions.jl")
 
 ##############################
-# * Hub and init
+# * Init
 #----------------------------
 
-struct NoSamples end
-struct RatioSampler
-    ratio::Float64
-    function RatioSampler(x)
-        @assert 0 <= x <= 1
-        new(x)
-    end
-end
-
-const TaskPayload = Union{Event,Transaction}
-# This is to supposedly support the "unified api" of the sentry sdk. I'm not a
-# fan, so it will only go partway to this goal.
-# Note: a proper implementation here would make Hub a module.
-@AutoParm mutable struct Hub
-    initialised::Bool = false
-    traces_sampler = NoSamples()
-
-    dsn = nothing
-    upstream::String = ""
-    project_id::String = ""
-    public_key::String = ""
-
-    debug::Bool = false
-
-    last_send_time = nothing
-    queued_tasks = Channel{TaskPayload}(100)
-    sender_task = nothing
-end
 
 const main_hub = Hub()
 
@@ -91,7 +41,7 @@ function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, 
             return
         end
     end
-        
+
     if !main_hub.initialised
         atexit(clear_queue)
     end
@@ -123,6 +73,8 @@ function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, 
 end
 
 function parse_dsn(dsn)
+    dsn == :fake && return (; upstream="", project_id="", public_key="")
+
     m = match(r"(?'protocol'\w+)://(?'public_key'\w+)@(?'hostname'[\w\.]+(?::\d+)?)/(?'project_id'\w+)"a, dsn)
     m === nothing && error("dsn does not fit correct format")
 
@@ -195,13 +147,31 @@ function PrepareBody(transaction::Transaction, buf)
                        dsn = main_hub.dsn
                        )
 
+    if main_hub.debug && any(span -> span.timestamp === nothing, transaction.spans)
+        @warn "At least one span didn't complete before the transaction completed"
+    end
+
+    spans = map(transaction.spans) do span
+        (;
+         transaction.trace_id,
+         span.parent_span_id,
+         span.span_id,
+         span.tags,
+         span.op,
+         span.description,
+         span.start_timestamp,
+         span.timestamp)
+    end
+    #root_span = popfirst!(spans)
+    root_span = pop!(spans)
+
     trace = (; 
-            transaction.trace_id,
-            transaction.op,
-            transaction.description,
-            transaction.tags,
-            transaction.span_id,
-             parent_span_id = nothing,
+             transaction.trace_id,
+             root_span.op,
+             root_span.description,
+             root_span.tags,
+             root_span.span_id,
+             root_span.parent_span_id,
             ) |> FilterNothings
 
     item = (; type="transaction",
@@ -209,11 +179,12 @@ function PrepareBody(transaction::Transaction, buf)
             server_name = gethostname(),
             transaction.event_id,
             transaction = transaction.name,
-            transaction.start_timestamp,
-            transaction.timestamp,
-            transaction.tags,
+            # root_span...,
+            root_span.start_timestamp,
+            root_span.timestamp,
+            
             contexts = (; trace),
-            spans = [],
+            spans = FilterNothings.(spans),
             ) |> FilterNothings
     item_str = JSON.json(item)
 
@@ -247,6 +218,16 @@ function send_envelope(task::TaskPayload)
     if main_hub.debug
         @info "Sending HTTP request" typeof(task)
     end
+    if main_hub.dsn === :fake
+        body = String(transcode(CodecZlib.GzipDecompressor, body))
+        lines = map(eachline(IOBuffer(body))) do line
+            line = JSON.Parser.parse(line)
+            line = JSON.json(line, 4)
+        end
+        @info "Would have sent this body"
+        foreach(println, lines)
+        return
+    end
     r = HTTP.request("POST", target, headers, body)
     if r.status == 429
         # TODO:
@@ -256,12 +237,14 @@ function send_envelope(task::TaskPayload)
     else
         error("Unknown status $(r.status)")
     end
+    nothing
 end
 
 function send_worker()
     while true
         try
             event = take!(main_hub.queued_tasks)
+            yield()
             send_envelope(event)
         catch exc
             if main_hub.debug
@@ -273,11 +256,12 @@ function send_worker()
 end
 
 function clear_queue()
-    while !isempty(main_hub.queued_tasks)
-        @info "Tidying up some sentry tasks before closing"
-        send_envelope(event)
-        yield()
+    while isready(main_hub.queued_tasks)
+        @info "Waiting for queue to finish before closing"
+        # send_envelope(take!(main_hub.queued_tasks))
+        sleep(5)
     end
+    close(main_hub.queued_tasks)
 end
 
 
@@ -304,7 +288,7 @@ end
 function capture_message(message, level::String)
     main_hub.initialised || return
 
-    capture_event(Event(message=(; formatted=message),
+    capture_event(Event(; message=(; formatted=message),
                         level))
 end
 
@@ -325,36 +309,11 @@ function capture_exception(exceptions=catch_stack())
         Dict(:type => typeof(exc).name.name,
          :module => string(typeof(exc).name.module),
          :value => hasproperty(exc, :msg) ? exc.msg : sprint(showerror, exc),
-         :stacktrace => (;frames=frames))
+         :stacktrace => (;frames=reverse(frames)))
     end
     capture_event(Event(exception=(;values=formatted_excs),
                         level="error"))
 end
 
-
-##############################
-# * Transactions
-#----------------------------
-
-function start_transaction(func ; kwds...)
-    transaction = get_transaction(; kwds...)
-    try
-        return func()
-    finally
-        complete(transaction)
-    end
-end
-
-function get_transaction(; kwds...)
-    main_hub.initialised || return nothing
-    transaction = Transaction(;kwds...)
-end
-
-complete(::Nothing) = nothing
-function complete(transaction::Transaction)
-    main_hub.initialised || error("Can't get here without sentry being initialised")
-    transaction.timestamp = nowstr()
-    capture_event(transaction)
-end
 
 end # module
