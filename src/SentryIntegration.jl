@@ -127,18 +127,31 @@ function PrepareBody(event::Event, buf)
             server_name = gethostname(),
             event.exception,
             event.message,
-            event.level
+            event.level,
+            event.tags,
             ) |> FilterNothings
     item_str = JSON.json(item)
 
     item_header = (; type="event",
                    content_type="application/json",
-                   length=sizeof(item_str)+1) # +1 for the newline to come
+                   length=sizeof(item_str))
 
 
     println(buf, JSON.json(envelope_header))
     println(buf, JSON.json(item_header))
     println(buf, item_str)
+
+    for attachment in event.attachments
+        attachment_str = JSON.json((;data=attachment))
+        attachment_header = (; type="attachment",
+                             length=sizeof(attachment_str),
+                             content_type="application/json")
+
+        println(buf, JSON.json(attachment_header))
+        println(buf, attachment_str)
+    end
+
+
     nothing
 end
 function PrepareBody(transaction::Transaction, buf)
@@ -278,19 +291,22 @@ function capture_event(task::TaskPayload)
     push!(main_hub.queued_tasks, task)
 end
 
-function capture_message(message, level::LogLevel=Info)
+function capture_message(message, level::LogLevel=Info ; kwds...)
     level_str = if level == Warn
         "warning"
     else
         lowercase(string(level))
     end
-    capture_message(message, level_str)
+    capture_message(message, level_str ; kwds...)
 end
-function capture_message(message, level::String)
+function capture_message(message, level::String ; tags=nothing, attachments::Vector=[])
     main_hub.initialised || return
 
-    capture_event(Event(; message=(; formatted=message),
-                        level))
+    capture_event(Event(;
+                        message=(; formatted=message),
+                        level,
+                        attachments,
+                        tags))
 end
 
 # This assumes that we are calling from within a catch

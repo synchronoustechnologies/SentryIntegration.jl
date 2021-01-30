@@ -10,6 +10,8 @@
     message = nothing
     exception = nothing
     level = nothing
+    tags = nothing
+    attachments::Vector{Any} = []
 end
 
 
