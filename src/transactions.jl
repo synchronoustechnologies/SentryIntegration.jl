@@ -79,7 +79,6 @@ function get_transaction(; trace_id=:auto, kwds...)
 end
 
 set_task_transaction(::Nothing) = nothing
-    task_local_storage(:sentry_transaction, InhibitTransaction())
 function set_task_transaction(::InhibitTransaction)
     task_local_storage(:sentry_transaction, InhibitTransaction())
 end
