@@ -29,6 +29,7 @@ end
     trace_id::String = generate_uuid4()
 
     spans::Vector{Span} = []
+    root_span::Union{Span,Nothing} = nothing
     num_open_spans::Int = 0
 end
 

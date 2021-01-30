@@ -163,7 +163,8 @@ function PrepareBody(transaction::Transaction, buf)
          span.timestamp)
     end
     #root_span = popfirst!(spans)
-    root_span = pop!(spans)
+    # root_span = pop!(spans)
+    root_span = transaction.root_span
 
     trace = (; 
              transaction.trace_id,

@@ -30,6 +30,9 @@ function start_transaction(; name="", trace_id=:auto, parent_span_id=nothing, sp
 
     span = Span(; parent_span_id=parent_span_id, span_kwds...)
     task_local_storage(:sentry_parent_span, span)
+    if transaction.root_span === nothing
+        transaction.root_span = span
+    end
     transaction.num_open_spans += 1
 
     (; transaction, parent_span, span)
@@ -39,7 +42,9 @@ finish_transaction(::Nothing) = nothing
 finish_transaction(::InhibitTransaction) = nothing
 function finish_transaction((transaction, parent_span, span))
     complete(span)
-    push!(transaction.spans, span)
+    if transaction.root_span !== span
+        push!(transaction.spans, span)
+    end
     task_local_storage(:sentry_parent_span, parent_span)
     transaction.num_open_spans -= 1
     if transaction.num_open_spans == 0

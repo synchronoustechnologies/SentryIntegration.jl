@@ -1,7 +1,7 @@
 using SentryIntegration
 
-# SentryIntegration.init(:fake, debug=true, traces_sample_rate=1.0)
-SentryIntegration.init(debug=true, traces_sample_rate=1.0)
+SentryIntegration.init("fake", debug=true, traces_sample_rate=1.0)
+# SentryIntegration.init(debug=true, traces_sample_rate=1.0)
 
 function somefunc(t, n)
     SentryIntegration.set_task_transaction(t)
