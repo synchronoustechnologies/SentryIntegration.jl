@@ -15,9 +15,9 @@ function start_transaction(func ; kwds...)
     end
 end
 
-function start_transaction(; name="", trace_id=:auto, parent_span_id=nothing, span_kwds...)
+function start_transaction(; name="", force_new=(name!=""), trace_id=:auto, parent_span_id=nothing, span_kwds...)
     trace_id === nothing && return nothing
-    t = get_transaction(; name, trace_id)
+    t = get_transaction(; name, trace_id, force_new)
     if t === nothing || t === InhibitTransaction()
         return t
     end
@@ -54,12 +54,17 @@ end
 
 
 
-function get_transaction(; trace_id=:auto, kwds...)
+function get_transaction(; force_new=false, trace_id=:auto, kwds...)
     main_hub.initialised || return nothing
 
-    transaction = get(task_local_storage(), :sentry_transaction, nothing)
-    if transaction === InhibitTransaction()
-        return transaction
+    if force_new
+        task_local_storage(:sentry_transaction, nothing)
+        transaction = nothing
+    else
+        transaction = get(task_local_storage(), :sentry_transaction, nothing)
+        if transaction === InhibitTransaction()
+            return transaction
+        end
     end
 
     if transaction === nothing
