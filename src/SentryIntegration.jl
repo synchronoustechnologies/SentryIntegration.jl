@@ -16,6 +16,7 @@ export capture_message,
     start_transaction,
     finish_transaction,
     set_task_transaction,
+    set_tag,
     Info,
     Warn,
     Error
@@ -30,6 +31,7 @@ include("transactions.jl")
 
 
 const main_hub = Hub()
+const global_tags = Dict{String,String}()
 
 function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, debug=false)
     main_hub.initialised && @warn "Sentry already initialised."
@@ -83,6 +85,15 @@ function parse_dsn(dsn)
     return (; upstream, project_id=m[:project_id], public_key=m[:public_key])
 end
 
+####################################################
+# * Globally applied things
+#--------------------------------------------------
+
+
+function set_tag(tag::String, data::String)
+    global_tags[tag] = data
+end
+
 ##############################
 # * Utils
 #----------------------------
@@ -114,6 +125,13 @@ function generate_uuid4()
 end
 
 FilterNothings(thing) = filter(x -> x.second !== nothing, pairs(thing))
+function MergeTags(args...)
+    args = filter(!=(nothing), args)
+    isempty(args) && return nothing
+    out = merge(pairs.(args)...)
+    isempty(out) && return nothing
+    out
+end
 
 function PrepareBody(event::Event, buf)
     envelope_header = (; event.event_id,
@@ -128,7 +146,7 @@ function PrepareBody(event::Event, buf)
             event.exception,
             event.message,
             event.level,
-            event.tags,
+            tags = MergeTags(global_tags, event.tags),
             ) |> FilterNothings
     item_str = JSON.json(item)
 
@@ -196,6 +214,7 @@ function PrepareBody(transaction::Transaction, buf)
             # root_span...,
             root_span.start_timestamp,
             root_span.timestamp,
+            tags = MergeTags(global_tags, root_span.tags),
             
             contexts = (; trace),
             spans = FilterNothings.(spans),
