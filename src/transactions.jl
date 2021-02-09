@@ -6,17 +6,19 @@
 struct InhibitTransaction end
 
 function start_transaction(func ; kwds...)
+    previous = get(task_local_storage(), :sentry_transaction, nothing)
     t = start_transaction(; kwds...)
 
     try
         return func(t)
     finally
-        finish_transaction(t)
+        finish_transaction(t, previous)
     end
 end
 
 function start_transaction(; name="", force_new=(name!=""), trace_id=:auto, parent_span_id=nothing, span_kwds...)
-    trace_id === nothing && return nothing
+    # trace_id === nothing && return nothing
+    # Need to pass through nothings so that we can hit an InhibitTransaction
     t = get_transaction(; name, trace_id, force_new)
     if t === nothing || t === InhibitTransaction()
         return t
@@ -38,6 +40,10 @@ function start_transaction(; name="", force_new=(name!=""), trace_id=:auto, pare
     (; transaction, parent_span, span)
 end
 
+function finish_transaction(current, previous)
+    finish_transaction(current)
+    task_local_storage(:sentry_transaction, previous)
+end
 finish_transaction(::Nothing) = nothing
 finish_transaction(::InhibitTransaction) = nothing
 function finish_transaction((transaction, parent_span, span))
@@ -62,20 +68,30 @@ function get_transaction(; force_new=false, trace_id=:auto, kwds...)
         transaction = nothing
     else
         transaction = get(task_local_storage(), :sentry_transaction, nothing)
-        if transaction === InhibitTransaction()
-            return transaction
-        end
     end
 
-    if transaction === nothing
-        if sample(main_hub.traces_sampler)
+    if transaction === InhibitTransaction()
+        return transaction
+    elseif transaction === nothing
+        if trace_id === nothing
+            transaction = InhibitTransaction()
+            task_local_storage(:sentry_transaction, transaction)
+            return transaction
+        elseif sample(main_hub.traces_sampler)
             if trace_id == :auto
                 trace_id = generate_uuid4()
             end
             transaction = Transaction(; trace_id, kwds...)
         else
             transaction = InhibitTransaction()
+            task_local_storage(:sentry_transaction, transaction)
+            return transaction
         end
+        # TODO: Note that the cases which store an InhibitTransaction in here
+        # are bad. They will lock out the start_transaction context manager from
+        # taking effect in any future cases. Instead, we should track this and
+        # later undo its effects once the outermost transaction is completed
+        # (meaning the InhibitTransaction itself should mimic a transaction).
         task_local_storage(:sentry_transaction, transaction)
         return (; transaction, parent_span=nothing)
     else
@@ -102,7 +118,6 @@ end
 function complete(transaction::Transaction)
     main_hub.initialised || error("Can't get here without sentry being initialised")
     capture_event(transaction)
-    task_local_storage(:current_transaction, nothing)
     nothing
 end
 
