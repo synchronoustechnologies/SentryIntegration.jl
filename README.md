@@ -13,9 +13,14 @@ featured, however it includes the basics, such as:
 
 ## Usage
 
-On start of your app, you need to initialise Sentry:
+On start of your app, you need to initialise Sentry. If the environment variable
+`SENTRY_DSN` is set, this is used by default:
 ```julia
 SentryIntegration.init()
+```
+otherwise you should pass in the DSN as a variable
+```julia
+SentryIntegration.init(dsn="SENTRY_DSN=https://0000000000000000000000000000000000000000.ingest.sentry.io/0000000")
 ```
 
 OPTIONAL: you can also assign tags that are relevant to your environment. For example:
