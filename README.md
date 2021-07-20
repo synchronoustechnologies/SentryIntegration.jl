@@ -28,7 +28,8 @@ SentryIntegration.set_tag("environment", get(ENV, "RUN_ENV", "unset"))
 Messages are sent out via `capture_exception` and `capture_message`:
 
 ```julia
-# At a high level in your app/tasks (to catch as many unhandled exceptions as possible)
+# At a high level in your app/tasks (to catch as many unhandled exceptions as
+# possible)
 try
     core_loop()
 catch exc
@@ -38,8 +39,14 @@ end
 ```
 
 ```julia
+# Plain info
+capture_message("Boring info message")
+```
+
+```julia
 # A warning to sentry
-capture_message("An external REST request was received for an API ($api_name) that is unknown", Warn)
+capture_message("An external REST request was received for an API ($api_name) that is unknown",
+                Warn)
 ```
 ```julia
 # A error to sentry
@@ -47,33 +54,35 @@ capture_message("Should not have got here!", Error)
 ```
 ```julia
 # A warning to sentry, including an attachment.
-capture_message("Noticed an 'errors' field in the GQL REST return:", Warn, attachments=[(;command, response)])
+capture_message("Noticed an 'errors' field in the GQL REST return:",
+                Warn,
+                attachments=[(;command, response)])
 ```
 ```julia
 # A message with different tags and attachments
-g_tag = "graph"
 spec_desc = "Specification for structure"
 script_desc = "Something more specific"
-msg = "Spec on $g_tag failed: $spec_desc ::: $script_desc"
+msg = "Spec failed: $spec_desc ::: $script_desc"
+json_data = "{ ... }"
+query_string = "DROP TABLES ;"
 capture_message(msg, Warn ;
-                attachments=json_data,
-                tags = (;
-                        spec_desc,
-                        script_desc,
-                        graph=g_tag))
+                attachments=[json_data, query_string],
+                tags = (; spec_desc,
+                          script_desc,
+                          graph=g_tag))
 ```
 
 ## Transaction/span tracing
 
 This is a more recent feature of Sentry to trace the execution of a query across
 multiple services, e.g. frontend -> authentication layer -> backend server ->
-backend database. You can use this package with a context-manager style 
+backend database. You can create these with a context-manager style 
 
 ```julia
 return_value_from_inner = SentryIntegration.start_transaction(;
-                                                              name="Name of overall transaction",
-                                                              op="span name, e.g. 'handle web request'",
-                                                              tags=[:url => some_url]) do t
+                            name="Name of overall transaction",
+                            op="span name, e.g. 'handle web request'",
+                            tags=[:url => some_url]) do t
     # Inner function whose logical operation is captured by the name "op" and
     # whose time is to be recorded. This is a "span" in Sentry.
     some_func()
@@ -93,7 +102,10 @@ pass it to spawned tasks. In this case, it is necessary to call
 `finish_transaction` on the transaction manually:
 
 ```julia
-t_persist = start_transaction(; name = "MyApp", op = "lifetime")
+t_persist = start_transaction(; name = "MyApp",
+                                op = "lifetime",
+                                trace_id=passed_in_trace_id)
+
 @async seperate_task(client, details, t_persist)
 # ...
 # Inside of seperate_task:
