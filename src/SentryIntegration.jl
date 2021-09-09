@@ -33,7 +33,7 @@ include("transactions.jl")
 const main_hub = Hub()
 const global_tags = Dict{String,String}()
 
-function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, debug=false)
+function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, debug=false, release=nothing)
     main_hub.initialised && @warn "Sentry already initialised."
     if dsn === nothing
         dsn = get(ENV, "SENTRY_DSN", nothing)
@@ -56,6 +56,8 @@ function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, 
     main_hub.upstream = upstream
     main_hub.project_id = project_id
     main_hub.public_key = public_key
+
+    main_hub.release = release
     
     @assert traces_sample_rate === nothing || traces_sampler === nothing
     if traces_sample_rate !== nothing
@@ -91,6 +93,9 @@ end
 
 
 function set_tag(tag::String, data::String)
+    if tag == "release"
+        @warn "A 'release' tag is ignored by sentry upstream. You should instead set the release in the `init` call"
+    end
     global_tags[tag] = data
 end
 
@@ -146,6 +151,7 @@ function PrepareBody(event::Event, buf)
             event.exception,
             event.message,
             event.level,
+            main_hub.release,
             tags = MergeTags(global_tags, event.tags),
             ) |> FilterNothings
     item_str = JSON.json(item)

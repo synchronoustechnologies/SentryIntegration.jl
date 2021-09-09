@@ -65,6 +65,8 @@ const TaskPayload = Union{Event,Transaction}
     project_id::String = ""
     public_key::String = ""
 
+    release::Union{Nothing,String} = nothing
+
     debug::Bool = false
 
     last_send_time = nothing
