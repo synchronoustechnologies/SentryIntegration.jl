@@ -1,7 +1,7 @@
 name = "SentryIntegration"
 uuid = "0c0dc41a-7892-49ef-a372-46007ef8f0a8"
 authors = ["Daniel Cocks <daniel.cocks@gmail.com>"]
-version = "0.4.7"
+version = "0.4.8"
 
 [deps]
 AutoParameters = "2688778c-3549-4980-b6fe-7a9ff5c92ab2"
