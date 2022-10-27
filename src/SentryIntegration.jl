@@ -58,7 +58,7 @@ function init(dsn=nothing ; traces_sample_rate=nothing, traces_sampler=nothing, 
     main_hub.public_key = public_key
 
     main_hub.release = release
-    
+
     @assert traces_sample_rate === nothing || traces_sampler === nothing
     if traces_sample_rate !== nothing
         main_hub.traces_sampler = RatioSampler(traces_sample_rate)
@@ -83,7 +83,7 @@ function parse_dsn(dsn)
     m === nothing && error("dsn does not fit correct format")
 
     upstream = "$(m[:protocol])://$(m[:hostname])"
-    
+
     return (; upstream, project_id=m[:project_id], public_key=m[:public_key])
 end
 
@@ -103,7 +103,7 @@ end
 # * Utils
 #----------------------------
 
-# Need to have an extra Z at the end - this indicates UTC?
+# Need to have an extra Z at the end - this indicates UTC
 nowstr() = string(now(UTC)) * "Z"
 
 # Useful util
@@ -203,7 +203,7 @@ function PrepareBody(transaction::Transaction, buf)
     # root_span = pop!(spans)
     root_span = transaction.root_span
 
-    trace = (; 
+    trace = (;
              transaction.trace_id,
              root_span.op,
              root_span.description,
@@ -221,7 +221,7 @@ function PrepareBody(transaction::Transaction, buf)
             root_span.start_timestamp,
             root_span.timestamp,
             tags = MergeTags(global_tags, root_span.tags),
-            
+
             contexts = (; trace),
             spans = FilterNothings.(spans),
             ) |> FilterNothings
@@ -298,9 +298,8 @@ function clear_queue()
     while isready(main_hub.queued_tasks)
         @info "Waiting for queue to finish before closing"
         # send_envelope(take!(main_hub.queued_tasks))
-        sleep(5)
+        sleep(1)
     end
-    close(main_hub.queued_tasks)
 end
 
 
@@ -347,7 +346,7 @@ function capture_exception(exceptions=catch_stack())
              :function => frame.func,
              :lineno => frame.line)
         end
-             
+
         Dict(:type => typeof(exc).name.name,
          :module => string(typeof(exc).name.module),
          :value => hasproperty(exc, :msg) ? exc.msg : sprint(showerror, exc),
