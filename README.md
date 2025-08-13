@@ -1,3 +1,10 @@
+# Note: please use alternative fork
+
+This repo is unmaintained. There is a fork at https://github.com/toolpath/SentryIntegration.jl which is maintained as at August 2025.
+
+
+-----
+
 # Sentry Integration
 
 This package allows a production environment to take advantage of
